@@ -663,6 +663,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             std::string model_path = model_derived_alias.substr(equals_pos + 1);
             params.derived_model_paths.emplace_back(alias, model_path);
         }
+        params.warmup = false;
 
         return true;
     }
@@ -2102,6 +2103,18 @@ std::tuple<struct llama_model *, struct llama_context *> llama_init_from_gpt_par
         llama_kv_cache_clear(lctx);
         llama_synchronize(lctx);
         llama_reset_timings(lctx);
+
+        for (unsigned int i = 0; i < params.derived_model_paths.size(); ++i) {
+            const auto& derived_model_path = params.derived_model_paths[i];
+            const std::string& derived_model_name = std::get<0>(derived_model_path);
+            llama_ctx_switch_derived_model(lctx, derived_model_name.c_str());
+            llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t)params.n_batch), 0, 0));
+            llama_kv_cache_clear(lctx);
+            llama_synchronize(lctx);
+            llama_reset_timings(lctx);
+        }
+
+        llama_ctx_switch_derived_model(lctx, BASE_MODEL);
     }
 
     return std::make_tuple(model, lctx);

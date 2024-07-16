@@ -151,22 +151,6 @@ int main(int argc, char ** argv) {
     console::init(params.simple_io, params.use_color);
     atexit([]() { console::cleanup(); });
 
-    if (params.logits_all) {
-        printf("\n************\n");
-        printf("%s: please use the 'perplexity' tool for perplexity calculations\n", __func__);
-        printf("************\n\n");
-
-        return 0;
-    }
-
-    if (params.embedding) {
-        printf("\n************\n");
-        printf("%s: please use the 'embedding' tool for embedding calculations\n", __func__);
-        printf("************\n\n");
-
-        return 0;
-    }
-
     if (params.n_ctx != 0 && params.n_ctx < 8) {
         LOG_TEE("%s: warning: minimum context size is 8, using minimum size.\n", __func__);
         params.n_ctx = 8;
@@ -236,7 +220,6 @@ int main(int argc, char ** argv) {
         LOG_TEE("\n");
         llama_print_derived_models(ctx);
     }
-    llama_ctx_switch_derived_model(ctx, "summarize");
 
     std::string path_session = params.path_prompt_cache;
     std::vector<llama_token> session_tokens;
@@ -266,7 +249,6 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> embd_inp;
 
-    params.prompt = "<|user|>\nhelp summarize the microsoft products.<|end|>\n<|assistant|>\n";
     {
         auto prompt = (params.conversation && params.enable_chat_template)
             ? chat_add_and_format(model, chat_msgs, "system", params.prompt) // format the system prompt in conversation mode
@@ -293,6 +275,20 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> guidance_inp;
     int guidance_offset = 0;
     int original_prompt_len = 0;
+    if (ctx_guidance) {
+        LOG("cfg_negative_prompt: \"%s\"\n", log_tostr(sparams.cfg_negative_prompt));
+
+        guidance_inp = ::llama_tokenize(ctx_guidance, sparams.cfg_negative_prompt, true, true);
+        LOG("guidance_inp tokenized: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx_guidance, guidance_inp).c_str());
+
+        std::vector<llama_token> original_inp = ::llama_tokenize(ctx, params.prompt, true, true);
+        LOG("original_inp tokenized: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, original_inp).c_str());
+
+        original_prompt_len = original_inp.size();
+        guidance_offset = (int)guidance_inp.size() - original_prompt_len;
+        LOG("original_prompt_len: %s", log_tostr(original_prompt_len));
+        LOG("guidance_offset:     %s", log_tostr(guidance_offset));
+    }
 
     if ((int) embd_inp.size() > n_ctx - 4) {
         LOG_TEE("%s: error: prompt is too long (%d tokens, max %d)\n", __func__, (int) embd_inp.size(), n_ctx - 4);
@@ -358,6 +354,15 @@ int main(int argc, char ** argv) {
         LOG_TEE("%s: number of tokens in prompt = %zu\n", __func__, embd_inp.size());
         for (int i = 0; i < (int) embd_inp.size(); i++) {
             LOG_TEE("%6d -> '%s'\n", embd_inp[i], llama_token_to_piece(ctx, embd_inp[i]).c_str());
+        }
+
+        if (ctx_guidance) {
+            LOG_TEE("\n");
+            LOG_TEE("%s: negative prompt: '%s'\n", __func__, sparams.cfg_negative_prompt.c_str());
+            LOG_TEE("%s: number of tokens in negative prompt = %zu\n", __func__, guidance_inp.size());
+            for (int i = 0; i < (int) guidance_inp.size(); i++) {
+                LOG_TEE("%6d -> '%s'\n", guidance_inp[i], llama_token_to_piece(ctx, guidance_inp[i]).c_str());
+            }
         }
 
         if (params.n_keep > add_bos) {
@@ -436,6 +441,15 @@ int main(int argc, char ** argv) {
     const int ga_n = params.grp_attn_n;
     const int ga_w = params.grp_attn_w;
 
+    if (ga_n != 1) {
+        GGML_ASSERT(ga_n > 0                    && "grp_attn_n must be positive");                     // NOLINT
+        GGML_ASSERT(ga_w % ga_n == 0            && "grp_attn_w must be a multiple of grp_attn_n");     // NOLINT
+      //GGML_ASSERT(n_ctx_train % ga_w == 0     && "n_ctx_train must be a multiple of grp_attn_w");    // NOLINT
+      //GGML_ASSERT(n_ctx >= n_ctx_train * ga_n && "n_ctx must be at least n_ctx_train * grp_attn_n"); // NOLINT
+        LOG_TEE("self-extend: n_ctx_train = %d, grp_attn_n = %d, grp_attn_w = %d\n", n_ctx_train, ga_n, ga_w);
+    }
+    LOG_TEE("\n\n");
+
     if (params.interactive) {
         const char * control_message;
         if (params.multiline_input) {
@@ -443,6 +457,7 @@ int main(int argc, char ** argv) {
                               " - To return control without starting a new line, end your input with '/'.\n";
         } else {
             control_message = " - Press Return to return control to the AI.\n"
+                              " - /switch model_alias to change model.\n"
                               " - To return control without starting a new line, end your input with '/'.\n"
                               " - If you want to submit another line, end your input with '\\'.\n";
         }
@@ -831,6 +846,21 @@ int main(int argc, char ** argv) {
                 // done taking input, reset color
                 console::set_display(console::reset);
                 display = true;
+
+                if (buffer.rfind("/switch ", 0) == 0) {
+                    std::string model_name = buffer.substr(8);
+                    model_name.erase(0, model_name.find_first_not_of(" \t\n\r"));
+                    model_name.erase(model_name.find_last_not_of(" \t\n\r") + 1);
+                    llama_ctx_switch_derived_model(ctx, model_name.c_str());
+
+                    llama_print_timings(ctx);
+                    llama_kv_cache_clear(ctx);
+                    llama_synchronize(ctx);
+                    llama_reset_timings(ctx);
+
+                    continue;
+                }
+
 
                 // Add tokens to embd only if the input buffer is non-empty
                 // Entering a empty line lets the user pass control back
