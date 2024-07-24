@@ -204,12 +204,46 @@ int main(int argc, char ** argv) {
     g_model = &model;
     g_ctx = &ctx;
 
+    // keep a copy of the lora adapter for later
+    std::vector<std::tuple<std::string, float>> lora_adapters_param = params.lora_adapter;
+    params.lora_adapter.clear();
+
     // load the model and apply lora adapter, if any
     LOG("%s: load the model and apply lora adapter, if any\n", __func__);
     std::tie(model, ctx) = llama_init_from_gpt_params(params);
     if (sparams.cfg_scale > 1.f) {
         struct llama_context_params lparams = llama_context_params_from_gpt_params(params);
         ctx_guidance = llama_new_context_with_model(model, lparams);
+    }
+
+    // a list to keep adaptors for later
+
+    struct my_lora_adapter {
+        std::string alias;
+        struct llama_lora_adapter * adapter;
+        float scale;
+    };
+
+    std::vector<my_lora_adapter> lora_adapters;
+    for (unsigned int i = 0; i < lora_adapters_param.size(); ++i) {
+
+        const std::string lora_adapter = std::get<0>(lora_adapters_param[i]);
+        float lora_scale = std::get<1>(lora_adapters_param[i]);
+        std::string alias;
+        std::string path = lora_adapter;
+        size_t pos = path.find("=");
+        if (pos != std::string::npos) {
+            alias = path.substr(0, pos);
+            path = path.substr(pos + 1);
+        }
+
+        auto adapter = llama_lora_adapter_init(model, path.c_str());
+        if (adapter == nullptr) {
+            fprintf(stderr, "%s: error: failed to apply lora adapter\n", __func__);
+            continue;
+        }
+
+        lora_adapters.push_back({alias, adapter, lora_scale});
     }
 
     if (model == NULL) {
@@ -890,6 +924,27 @@ int main(int argc, char ** argv) {
                 // done taking input, reset color
                 console::set_display(console::reset);
                 display = true;
+
+                if (buffer.rfind("/switch ", 0) == 0) {
+                    std::string model_name = buffer.substr(8);
+                    model_name.erase(0, model_name.find_first_not_of(" \t\n\r"));
+                    model_name.erase(model_name.find_last_not_of(" \t\n\r") + 1);
+
+                    LOG("switching to model: '%s'\n", model_name.c_str());
+                    llama_lora_adapters_clear(ctx);
+                    for (auto& it : lora_adapters) {
+                        if(it.alias == model_name) {
+                            llama_lora_adapter_set(ctx, it.adapter, it.scale);
+                            break;
+                        }
+                    }
+                    // llama_ctx_switch_adaptor(ctx, model_name.c_str());
+                    llama_print_timings(ctx);
+                    llama_kv_cache_clear(ctx);
+                    llama_reset_timings(ctx);
+
+                    continue;
+                }
 
                 // Add tokens to embd only if the input buffer is non-empty
                 // Entering a empty line lets the user pass control back

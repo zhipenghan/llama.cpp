@@ -7894,9 +7894,9 @@ static struct ggml_tensor * llm_build_lora_mm(
           struct ggml_tensor * cur) {
     struct ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
     for (auto & it : lctx.lora_adapters) {
-        if(!it.first->enabled) {
+        /*if(!it.first->enabled) {
             continue;
-        }
+        }*/
         struct llama_lora_weight * lora = it.first->get_weight(w);
         if (lora == nullptr) {
             continue;
@@ -7923,9 +7923,9 @@ static struct ggml_tensor * llm_build_lora_mm_id(
           struct ggml_tensor * ids) {
     struct ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
     for (auto & it : lctx.lora_adapters) {
-        if (!it.first->enabled) {
+        /*if (!it.first->enabled) {
             continue;
-        }
+        }*/
         struct llama_lora_weight * lora = it.first->get_weight(w);
         if (lora == nullptr) {
             continue;
@@ -18811,6 +18811,11 @@ int32_t llama_lora_adapter_remove(
         return 0;
     }
     return -1;
+}
+
+int32_t llama_lora_adapters_clear(struct llama_context * ctx) {
+    ctx->lora_adapters.clear();
+    return 0;
 }
 
 void llama_lora_adapter_free(struct llama_lora_adapter * adapter) {

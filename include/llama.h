@@ -539,6 +539,9 @@ extern "C" {
             struct llama_context * ctx,
             struct llama_lora_adapter * adapter);
 
+    // Clear all LoRA adapters from the given context
+    LLAMA_API int32_t llama_lora_adapters_clear(struct llama_context * ctx);
+
     // Manually free a LoRA adapter
     // Note: loaded adapters will be free when the associated model is deleted
     LLAMA_API void llama_lora_adapter_free(struct llama_lora_adapter * adapter);
